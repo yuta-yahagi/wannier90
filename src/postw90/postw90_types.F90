@@ -69,6 +69,10 @@ module w90_postw90_types
     !! Read the spin from fortran formatted file
     logical :: uHu_formatted = .false.
     !! Read the uHu from fortran formatted file
+    character(len=20) :: orb_spin_order = 'half_split'
+    !! Ordering convention for spin-orbital channels in orbital-projected input
+    logical :: orb_spin_order_set = .false.
+    !! True if orb_spin_order is explicitly set in the input
   end type pw90_oper_read_type
 
   type kmesh_spacing_type

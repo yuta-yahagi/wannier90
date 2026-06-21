@@ -1693,7 +1693,7 @@ contains
     real(kind=dp)                 :: s_real, s_img
     integer, allocatable          :: num_states(:)
     integer                       :: m, n, spn_in, ik, is, &
-                                     nb_tmp, nkp_tmp, ierr, s, counter
+                                     nb_tmp, nkp_tmp, ierr, s, counter, s_type
     character(len=60)             :: header
     logical :: on_root = .false.
 
@@ -1727,6 +1727,15 @@ contains
       ! Read from .spn file the original spin matrices <psi_nk|sigma_i|psi_mk>
       ! (sigma_i = Pauli matrix) between ab initio eigenstates
       !
+      if (trim(pw90_oper_read%orb_spin_order) == 'half_split') then
+        s_type = 0
+      elseif (trim(pw90_oper_read%orb_spin_order) == 'alternating') then
+        s_type = 1
+      else
+        call set_error_fatal(error, 'Error in get_SS_R: orb_spin_order must be one of: half_split, alternating', comm)
+        return
+      end if
+
       if (pw90_oper_read%spn_formatted) then
         open (newunit=spn_in, file=trim(seedname)//'.spn', form='formatted', &
               status='old', err=109)
@@ -1903,7 +1912,7 @@ contains
     complex(kind=dp)              :: SHM_q(num_wann, num_wann, 3)
 
     real(kind=dp)                 :: s_real, s_img
-    integer                       :: spn_in, counter, ierr, s, is
+    integer                       :: spn_in, counter, ierr, s, is, s_type
 
     integer                       :: n, m, &
                                      ik, ik2, ik_prev, nn, inn, nnl, nnm, nnn, &
@@ -1964,6 +1973,15 @@ contains
       ! Read from .spn file the original spin matrices <psi_nk|sigma_i|psi_mk>
       ! (sigma_i = Pauli matrix) between ab initio eigenstates
       !
+      if (trim(pw90_oper_read%orb_spin_order) == 'half_split') then
+        s_type = 0
+      elseif (trim(pw90_oper_read%orb_spin_order) == 'alternating') then
+        s_type = 1
+      else
+        call set_error_fatal(error, 'Error in get_SH_R: orb_spin_order must be one of: half_split, alternating', comm)
+        return
+      end if
+
       if (pw90_oper_read%spn_formatted) then
         open (newunit=spn_in, file=trim(seedname)//'.spn', form='formatted', &
               status='old', err=109)

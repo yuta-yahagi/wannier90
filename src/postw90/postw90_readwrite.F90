@@ -482,6 +482,21 @@ contains
     call w90_readwrite_get_keyword(settings, 'uhu_formatted', found, error, comm, &
                                    l_value=pw90_oper_read%uHu_formatted)
     if (allocated(error)) return
+
+    call w90_readwrite_get_keyword(settings, 'orb_spin_order', found, error, comm, &
+                                   c_value=pw90_oper_read%orb_spin_order)
+    if (allocated(error)) return
+    pw90_oper_read%orb_spin_order_set = found
+
+    if (found) then
+      if (trim(pw90_oper_read%orb_spin_order) /= 'half_split' .and. &
+          trim(pw90_oper_read%orb_spin_order) /= 'alternating') then
+        call set_error_fatal(error, 'Error: orb_spin_order must be one of: half_split, alternating', comm)
+        return
+      end if
+    else
+      pw90_oper_read%orb_spin_order = 'half_split'
+    end if
   end subroutine w90_wannier90_readwrite_read_oper
 
   !================================================!
