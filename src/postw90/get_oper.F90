@@ -3116,6 +3116,38 @@ contains
 
   end subroutine get_SAA_R
 
+  !================================================
+  subroutine get_local_lmat_wan90(num_m, lmat_in, umat, lmat_out, error, comm)
+    !================================================
+    !! lmat_out = U^\dagger lmat_in U
+    !! Hermitian; unit = hbar or dimensionless.
+    !================================================
+    use w90_utility, only: utility_zgemmm
+    implicit none
+    integer, intent(in) :: num_m
+    complex(kind=dp), intent(in) :: lmat_in(num_m, num_m, 3), umat(num_m, num_m)
+    complex(kind=dp), intent(out) :: lmat_out(num_m, num_m, 3)
+    type(w90_comm_type), intent(in) :: comm
+    type(w90_error_type), allocatable, intent(out) :: error
+    complex(kind=dp), allocatable :: ltmp(:, :)
+    integer :: idir, ierr
+
+    allocate (ltmp(num_m, num_m), stat=ierr)
+    if (ierr /= 0) then
+      call set_error_alloc(error, 'Error in allocating ltmp in get_local_lmat_wan90', comm)
+      return
+    end if
+
+    lmat_out = cmplx_0
+    do idir = 1, 3
+      call utility_zgemmm(lmat_in(:, :, idir), 'N', umat(:, :), 'N', ltmp(:, :))
+      call utility_zgemmm(umat(:, :), 'C', ltmp(:, :), 'N', lmat_out(:, :, idir))
+    end do
+
+    deallocate (ltmp, stat=ierr)
+    if (ierr /= 0) call set_error_dealloc(error, 'Error in deallocating ltmp in get_local_lmat_wan90', comm)
+  end subroutine get_local_lmat_wan90
+
   !================================================!
   !                   PRIVATE PROCEDURES
   !================================================!
