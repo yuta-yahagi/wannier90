@@ -473,9 +473,18 @@ contains
 
     logical :: found
 
+    call w90_readwrite_get_keyword(settings, 'write_orb', found, error, comm, &
+                                   l_value=pw90_oper_read%write_orb)
+    if (allocated(error)) return
+
     ! formatted or "binary" file
     call w90_readwrite_get_keyword(settings, 'spn_formatted', found, error, comm, &
                                    l_value=pw90_oper_read%spn_formatted)
+    if (allocated(error)) return
+
+    ! formatted or "binary" file
+    call w90_readwrite_get_keyword(settings, 'orb_formatted', found, error, comm, &
+                                   l_value=pw90_oper_read%orb_formatted)
     if (allocated(error)) return
 
     ! formatted or "binary" file
@@ -2107,6 +2116,14 @@ contains
         write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  Spn file-type                   :', 'formatted', '|'
       else
         write (stdout, '(1x,a46,7x,a11,13x,a1)') '|  Spn file-type                   :', 'unformatted', '|'
+      end if
+      write (stdout, '(1x,a46,10x,L8,13x,a1)') '|  Write/read orbital data                  :', pw90_oper_read%write_orb, '|'
+      if (pw90_oper_read%orb_formatted) then
+        write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  Orb file-type                   :', 'formatted', '|'
+        write (stdout, '(1x,a46,8x,a10,13x,a1)') '|  Orb file read/write             :', trim(seedname)//'.orb.fmt', '|'
+      else
+        write (stdout, '(1x,a46,7x,a11,13x,a1)') '|  Orb file-type                   :', 'unformatted', '|'
+        write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  Orb file read/write             :', trim(seedname)//'.orb', '|'
       end if
       if (pw90_oper_read%uHu_formatted) then
         write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  uHu file-type                   :', 'formatted', '|'

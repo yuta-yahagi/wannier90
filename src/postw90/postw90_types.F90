@@ -63,10 +63,14 @@ module w90_postw90_types
 
   type pw90_oper_read_type
     !!==================================================
-    !! Contains variables for determining whether formatted or unformatted input is read by get_oper.F90
+    !! Contains variables controlling optional operator I/O in postw90.x
     !!==================================================
+    logical :: write_orb = .false.
+    !! Read/write orbital matrix elements from/to seedname.orb(.fmt) when needed
     logical :: spn_formatted = .false.
     !! Read the spin from fortran formatted file
+    logical :: orb_formatted = .false.
+    !! Read/write the orbital data from/to fortran formatted file
     logical :: uHu_formatted = .false.
     !! Read the uHu from fortran formatted file
   end type pw90_oper_read_type
