@@ -814,7 +814,7 @@ contains
     use w90_comms, only: comms_bcast, w90_comm_type, mpirank
     use w90_io, only: io_stopwatch_start, io_stopwatch_stop
     use w90_utility, only: utility_recip_lattice_base
-    use w90_get_oper, only: get_HH_R, get_SS_R
+    use w90_get_oper, only: get_HH_R, get_SS_R, get_LL_R
     use w90_types, only: print_output_type, wannier_data_type, dis_manifold_type, &
                          ws_region_type, ws_distance_type, timer_list_type
     use w90_postw90_types, only: pw90_boltzwann_type, pw90_spin_mod_type, &
