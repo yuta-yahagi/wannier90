@@ -28,6 +28,7 @@ OBJS_POST  = ws_distance.o types.o kmesh.o io.o comms.o utility.o get_oper.o con
 wannier: ../../wannier90.x
 w90chk2chk: ../../w90chk2chk.x
 w90spn2spn: ../../w90spn2spn.x
+w90orb2orb: ../../w90orb2orb.x
 post: mpi_test ../../postw90.x
 
 ../../wannier90.x: wannier_prog.F90 ../../$(STATICLIBRARY) $(STATICLIBRARYEXTRA)
@@ -37,6 +38,9 @@ post: mpi_test ../../postw90.x
 	$(COMPILER) $(POSTOPTS) $(FCOPTS) $< $(LDOPTS) $(OBJS) $(LIBS) -o $@
 
 ../../w90spn2spn.x: w90spn2spn.F90 $(OBJS)
+	$(COMPILER) $(POSTOPTS) $(FCOPTS) $< $(LDOPTS) $(OBJS) $(LIBS) -o $@
+
+../../w90orb2orb.x: w90orb2orb.F90 $(OBJS)
 	$(COMPILER) $(POSTOPTS) $(FCOPTS) $< $(LDOPTS) $(OBJS) $(LIBS) -o $@
 
 ../../postw90.x: $(POSTDIR)postw90.F90 $(OBJS_POST)
@@ -191,4 +195,4 @@ postw90_types.o: $(POSTDIR)postw90_types.F90 comms.o types.o utility.o constants
 postw90_readwrite.o: $(POSTDIR)postw90_readwrite.F90 comms.o postw90_types.o types.o utility.o constants.o io.o error.o wannier90_readwrite.o
 	$(COMPILER) $(POSTOPTS) $(FCOPTS) -c $<
 
-.PHONY: wannier staticlib dynlib post clean mpi_test w90spn2spn
+.PHONY: wannier staticlib dynlib post clean mpi_test w90spn2spn w90orb2orb

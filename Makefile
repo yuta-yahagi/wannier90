@@ -24,7 +24,7 @@ VERSION_SHORT = $(VERSION_MAJOR).$(VERSION_MINOR)
 
 install: default
 	install -d $(DESTDIR)$(PREFIX)/bin/
-	for x in wannier90.x postw90.x w90chk2chk.x w90spn2spn.x ; do \
+	for x in wannier90.x postw90.x w90chk2chk.x w90spn2spn.x w90orb2orb.x ; do \
 		if [ -f "$$x" ]; then install -m755 "$$x" "$(DESTDIR)$(PREFIX)/bin/$$x"; fi; \
 	done
 	if [ -f "utility/w90pov/w90pov" ]; then install -m755 "utility/w90pov/w90pov" "$(DESTDIR)$(PREFIX)/bin/w90pov"; fi;
@@ -39,7 +39,7 @@ install: default
 	if [ -f "$(DYNLIBRARY)" ]; then install -m644 "$(DYNLIBRARY)" "$(DESTDIR)$(PREFIX)/lib/$(DYNLIBRARY)"; fi;
 	if [ -f "$(STATICLIBRARY)" ]; then $(MAKE) pkgconfig; fi;
 
-all: wannier libs post w90chk2chk w90pov w90vdw w90spn2spn
+all: wannier libs post w90chk2chk w90pov w90vdw w90spn2spn w90orb2orb
 
 doc: thedoc
 
@@ -49,10 +49,13 @@ w90chk2chk:
 w90spn2spn:
 	$(MAKE) -C src/obj w90spn2spn
 
+w90orb2orb:
+	$(MAKE) -C src/obj w90orb2orb
+
 wannier:
 	$(MAKE) -C src/obj wannier
 
-# General rule to make the wannier90.x, postw90.x, w90chk2chk.x and w90spn2spn.x executables
+# General rule to make the wannier90.x, postw90.x, w90chk2chk.x, w90spn2spn.x and w90orb2orb.x executables
 # Internally it uses ../$@ because in the src/ directory, the executable is created one level up
 # (i.e. in the root directory)
 %.x:
@@ -108,7 +111,7 @@ clean:
 
 # Note: .x.dSYM are directories (hence the -r option to rm) and are only created on macOS (when compiling with certain flags, e.g. debug), so they are not always present
 veryclean: clean
-	cd $(ROOTDIR) && rm -rf wannier90.x postw90.x w90chk2chk.x w90spn2spn.x libwannier90.{a,so.4} libwannier90_mpi.{a,so.4} *.{gcda,gcno} *.x.dSYM
+	cd $(ROOTDIR) && rm -rf wannier90.x postw90.x w90chk2chk.x w90spn2spn.x w90orb2orb.x libwannier90.{a,so.4} libwannier90_mpi.{a,so.4} *.{gcda,gcno} *.x.dSYM
 	cd $(ROOTDIR)/test-suite && ./clean_tests -i
 
 thedoc:
@@ -240,4 +243,4 @@ dist-lite:
 		./CHANGE.log \
 	)
 
-.PHONY: wannier default all doc libs staticlib dynlib post clean veryclean thedoc dist test-serial test-parallel dist-lite tests w90spn2spn install pkgconfig
+.PHONY: wannier default all doc libs staticlib dynlib post clean veryclean thedoc dist test-serial test-parallel dist-lite tests w90spn2spn w90orb2orb install pkgconfig
