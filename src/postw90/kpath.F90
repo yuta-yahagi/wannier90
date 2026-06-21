@@ -75,7 +75,7 @@ contains
     use w90_comms, only: w90_comm_type, mpirank, mpisize, comms_array_split, comms_scatterv, &
                          comms_gatherv, comms_bcast
     use w90_constants, only: dp, eps8
-    use w90_get_oper, only: get_HH_R, get_AA_R_effective, get_AA_R, get_BB_R, get_CC_R, get_SS_R, get_SHC_R
+    use w90_get_oper, only: get_HH_R, get_AA_R_effective, get_AA_R, get_BB_R, get_CC_R, get_SS_R, get_LL_R, get_SHC_R
     use w90_io, only: io_time
     use w90_postw90_common, only: pw90common_fourier_R_to_k
     use w90_types, only: kpoint_path_type, print_output_type, wannier_data_type, &

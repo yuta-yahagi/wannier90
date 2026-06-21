@@ -51,6 +51,8 @@ module w90_get_oper
 
   private :: fourier_q_to_R
   private :: get_win_min
+  private :: get_local_lmat_wan90
+  private :: place_lmat_block_wan90
 
   integer :: nno, nn1o, nn2o
 
@@ -1834,6 +1836,170 @@ contains
     return
 
   end subroutine get_SS_R
+
+  !================================================
+  subroutine get_LL_R(kpt_latt, print_output, LL_R, wigner_seitz, ws_distance, ws_region, &
+                      num_kpts, num_wann, timer, error, comm)
+    !================================================
+    !
+    !! computes <0n|L_x,y,z|Rm> in units of hbar (dimensionless)
+    !
+    !================================================
+    use w90_postw90_types, only: wigner_seitz_type
+    use w90_types, only: print_output_type, timer_list_type, ws_distance_type, ws_region_type
+    implicit none
+
+    type(print_output_type), intent(in) :: print_output
+    type(wigner_seitz_type), intent(in) :: wigner_seitz
+    type(ws_distance_type), intent(in) :: ws_distance
+    type(ws_region_type), intent(in) :: ws_region
+    type(timer_list_type), intent(inout) :: timer
+    type(w90_error_type), allocatable, intent(out) :: error
+    type(w90_comm_type), intent(in) :: comm
+
+    integer, intent(in) :: num_kpts, num_wann
+    real(kind=dp), intent(in) :: kpt_latt(:, :)
+    complex(kind=dp), allocatable, intent(inout) :: LL_R(:, :, :, :) ! <0n|L_x,y,z|Rm> [hbar]
+
+    complex(kind=dp), allocatable :: LL_q(:, :, :, :)
+    complex(kind=dp), allocatable :: LL_R_temp(:, :, :, :)
+    complex(kind=dp), allocatable :: lmat_local(:, :, :)
+    integer :: ist
+    logical :: on_root = .false.
+
+    if (mpirank(comm) == 0) on_root = .true.
+
+    if (print_output%timing_level > 1 .and. print_output%iprint > 0) &
+      call io_stopwatch_start('get_oper: get_LL_R', timer)
+
+    allocate (LL_R_temp(num_wann, num_wann, wigner_seitz%nrpts, 3))
+    LL_R_temp = cmplx_0
+
+    if (.not. allocated(LL_R)) then
+      allocate (LL_R(num_wann, num_wann, wigner_seitz%nrpts_pw90, 3))
+    else
+      if (print_output%timing_level > 1 .and. print_output%iprint > 0) &
+        call io_stopwatch_stop('get_oper: get_LL_R', timer)
+      return
+    end if
+
+    allocate (LL_q(num_wann, num_wann, num_kpts, 3))
+    LL_q = cmplx_0
+
+    if (on_root) then
+      ! Minimal on-site model: fill each Wannier with l=0 shell (L=0).
+      ! Units are hbar (dimensionless), consistently for LL_q and LL_R.
+      do ist = 1, num_wann
+        allocate (lmat_local(1, 1, 3))
+        call get_local_lmat_wan90(0, lmat_local)
+        call place_lmat_block_wan90(LL_q, ist, ist, 0, 0, lmat_local, num_wann, num_kpts)
+        deallocate (lmat_local)
+      end do
+
+      call fourier_q_to_R(num_kpts, wigner_seitz%nrpts, wigner_seitz%irvec, kpt_latt, &
+                          LL_q(:, :, :, 1), LL_R_temp(:, :, :, 1))
+      call fourier_q_to_R(num_kpts, wigner_seitz%nrpts, wigner_seitz%irvec, kpt_latt, &
+                          LL_q(:, :, :, 2), LL_R_temp(:, :, :, 2))
+      call fourier_q_to_R(num_kpts, wigner_seitz%nrpts, wigner_seitz%irvec, kpt_latt, &
+                          LL_q(:, :, :, 3), LL_R_temp(:, :, :, 3))
+
+      call operator_wigner_setup(ws_distance, ws_region, wigner_seitz, num_wann, LL_R_temp(:, :, :, 1), LL_R(:, :, :, 1))
+      call operator_wigner_setup(ws_distance, ws_region, wigner_seitz, num_wann, LL_R_temp(:, :, :, 2), LL_R(:, :, :, 2))
+      call operator_wigner_setup(ws_distance, ws_region, wigner_seitz, num_wann, LL_R_temp(:, :, :, 3), LL_R(:, :, :, 3))
+    end if
+
+    call comms_bcast(LL_R(1, 1, 1, 1), num_wann*num_wann*wigner_seitz%nrpts_pw90*3, error, comm)
+    if (allocated(error)) return
+
+    if (print_output%iprint > 1 .and. on_root) then
+      write (*, '(a)') ' get_LL_R: <Lx,Ly,Lz> stored in units of hbar (dimensionless).'
+    end if
+
+    if (print_output%timing_level > 1 .and. print_output%iprint > 0) &
+      call io_stopwatch_stop('get_oper: get_LL_R', timer)
+
+    deallocate (LL_R_temp)
+    deallocate (LL_q)
+  end subroutine get_LL_R
+
+  subroutine get_local_lmat_wan90(l, lmat_local)
+    implicit none
+    integer, intent(in) :: l
+    complex(kind=dp), allocatable, intent(out) :: lmat_local(:, :, :)
+    complex(kind=dp), allocatable :: lz_c(:, :), lp_c(:, :), lm_c(:, :)
+    complex(kind=dp), allocatable :: lx_c(:, :), ly_c(:, :), cmat(:, :)
+    integer :: n, m
+
+    n = 2*l + 1
+    allocate (lmat_local(n, n, 3))
+    allocate (lz_c(n, n), lp_c(n, n), lm_c(n, n), lx_c(n, n), ly_c(n, n), cmat(n, n))
+    lmat_local = cmplx_0
+    lz_c = cmplx_0
+    lp_c = cmplx_0
+    lm_c = cmplx_0
+    cmat = cmplx_0
+
+    do m = -l, l
+      lz_c(m + l + 1, m + l + 1) = cmplx(real(m, dp), 0.0_dp, dp)
+      if (m < l) lp_c(m + l + 2, m + l + 1) = cmplx(sqrt(real(l*(l + 1) - m*(m + 1), dp)), 0.0_dp, dp)
+      if (m > -l) lm_c(m + l, m + l + 1) = cmplx(sqrt(real(l*(l + 1) - m*(m - 1), dp)), 0.0_dp, dp)
+    end do
+    lx_c = 0.5_dp*(lp_c + lm_c)
+    ly_c = -0.5_dp*cmplx_i*(lp_c - lm_c)
+
+    call build_cmat_wan90(l, cmat)
+    lmat_local(:, :, 1) = matmul(cmat, matmul(lx_c, conjg(transpose(cmat))))
+    lmat_local(:, :, 2) = matmul(cmat, matmul(ly_c, conjg(transpose(cmat))))
+    lmat_local(:, :, 3) = matmul(cmat, matmul(lz_c, conjg(transpose(cmat))))
+  end subroutine get_local_lmat_wan90
+
+  subroutine build_cmat_wan90(l, cmat)
+    implicit none
+    integer, intent(in) :: l
+    complex(kind=dp), intent(inout) :: cmat(:, :)
+    integer :: n, idx, mp
+    n = 2*l + 1
+    cmat = cmplx_0
+    if (l == 0) then
+      cmat(1, 1) = cmplx_1
+      return
+    end if
+    idx = 1
+    do mp = 1, l
+      cmat(idx, l + 1 + mp) = cmplx(1.0_dp/sqrt(2.0_dp), 0.0_dp, dp)
+      cmat(idx, l + 1 - mp) = cmplx((-1.0_dp)**mp/sqrt(2.0_dp), 0.0_dp, dp)
+      idx = idx + 1
+    end do
+    cmat(idx, l + 1) = cmplx_1
+    idx = idx + 1
+    do mp = 1, l
+      cmat(idx, l + 1 + mp) = cmplx(0.0_dp, -1.0_dp/sqrt(2.0_dp), dp)
+      cmat(idx, l + 1 - mp) = cmplx(0.0_dp, (-1.0_dp)**mp/sqrt(2.0_dp), dp)
+      idx = idx + 1
+    end do
+  end subroutine build_cmat_wan90
+
+  subroutine place_lmat_block_wan90(LL_q, ioff, joff, s_type_i, s_type_j, lmat_local, num_wann, num_kpts)
+    implicit none
+    integer, intent(in) :: ioff, joff, s_type_i, s_type_j, num_wann, num_kpts
+    complex(kind=dp), intent(inout) :: LL_q(:, :, :, :)
+    complex(kind=dp), intent(in) :: lmat_local(:, :, :)
+    integer :: nloc, a, b, ik
+    nloc = size(lmat_local, 1)
+    do ik = 1, num_kpts
+      do a = 1, nloc
+        do b = 1, nloc
+          if (ioff + a - 1 <= num_wann .and. joff + b - 1 <= num_wann) then
+            LL_q(ioff + a - 1, joff + b - 1, ik, :) = lmat_local(a, b, :)
+          end if
+        end do
+      end do
+    end do
+    if (s_type_i == 1 .or. s_type_j == 1) then
+      ! Reserved for alternate spin-ordering convention (s_type=1).
+      ! Current implementation uses identical ordering to s_type=0.
+    end if
+  end subroutine place_lmat_block_wan90
 
   !================================================
   subroutine get_SHC_R(dis_manifold, kmesh_info, kpt_latt, print_output, pw90_oper_read, &
