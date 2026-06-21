@@ -53,8 +53,100 @@ module w90_get_oper
   private :: get_win_min
 
   integer :: nno, nn1o, nn2o
+  integer, allocatable :: proj_l_qnums(:)
+  integer, allocatable :: proj_spin_order(:)
+  integer :: spinor_ordering_mode = 0 ! 0:auto, 1:block(up...down), 2:alternating(up,down,...)
+
+  public :: set_projection_qnums
+  public :: set_spinor_ordering
+  public :: get_LL_R
 
 contains
+
+  subroutine set_projection_qnums(qnums_l, spin_order, error, comm)
+    integer, intent(in) :: qnums_l(:)
+    integer, intent(in), optional :: spin_order(:)
+    type(w90_comm_type), intent(in) :: comm
+    type(w90_error_type), allocatable, intent(out) :: error
+    integer :: ierr
+
+    if (allocated(proj_l_qnums)) then
+      deallocate (proj_l_qnums, stat=ierr)
+      if (ierr /= 0) call set_error_dealloc(error, 'Error deallocating proj_l_qnums in set_projection_qnums', comm)
+    end if
+    allocate (proj_l_qnums(size(qnums_l)), stat=ierr)
+    if (ierr /= 0) then
+      call set_error_alloc(error, 'Error allocating proj_l_qnums in set_projection_qnums', comm)
+      return
+    end if
+    proj_l_qnums(:) = qnums_l(:)
+
+    if (present(spin_order)) then
+      if (allocated(proj_spin_order)) then
+        deallocate (proj_spin_order, stat=ierr)
+        if (ierr /= 0) call set_error_dealloc(error, 'Error deallocating proj_spin_order in set_projection_qnums', comm)
+      end if
+      allocate (proj_spin_order(size(spin_order)), stat=ierr)
+      if (ierr /= 0) then
+        call set_error_alloc(error, 'Error allocating proj_spin_order in set_projection_qnums', comm)
+        return
+      end if
+      proj_spin_order(:) = spin_order(:)
+    end if
+  end subroutine set_projection_qnums
+
+  subroutine set_spinor_ordering(mode)
+    integer, intent(in) :: mode
+    spinor_ordering_mode = mode
+  end subroutine set_spinor_ordering
+
+  subroutine get_LL_R(LL_R, num_wann, stdout, error, comm)
+    complex(kind=dp), intent(inout) :: LL_R(:, :)
+    integer, intent(in) :: num_wann, stdout
+    type(w90_comm_type), intent(in) :: comm
+    type(w90_error_type), allocatable, intent(out) :: error
+    integer :: i, l, cnt, expected, s
+    logical :: block_ok, alt_ok
+
+    if (.not. allocated(proj_l_qnums)) then
+      call set_error_fatal(error, 'Error in get_LL_R: qnums(:,3)=l data is not set', comm)
+      return
+    end if
+    if (size(proj_l_qnums) < num_wann) then
+      call set_error_fatal(error, 'Error in get_LL_R: qnums(:,3)=l array is smaller than num_wann', comm)
+      return
+    end if
+    if (.not. allocated(proj_spin_order)) then
+      call set_error_fatal(error, 'Error in get_LL_R: spinor ordering data is not set', comm)
+      return
+    end if
+
+    block_ok = .true.; alt_ok = .true.
+    do i = 1, min(num_wann, size(proj_spin_order))
+      s = proj_spin_order(i)
+      if (i <= num_wann/2) then
+        if (s /= 1) block_ok = .false.
+      else
+        if (s /= -1) block_ok = .false.
+      end if
+      if (mod(i, 2) == 1) then
+        if (s /= 1) alt_ok = .false.
+      else
+        if (s /= -1) alt_ok = .false.
+      end if
+    end do
+    if ((spinor_ordering_mode == 1 .and. .not. block_ok) .or. (spinor_ordering_mode == 2 .and. .not. alt_ok) .or. &
+        (spinor_ordering_mode == 0 .and. .not. (block_ok .or. alt_ok))) then
+      call set_error_fatal(error, 'spinor ordering incompatible with orbital block construction', comm)
+      return
+    end if
+
+    do l = 0, 2
+      cnt = count(proj_l_qnums(1:num_wann) == l)
+      expected = 2*l + 1
+      write (stdout, '(A,I1,A,I0,A,I0)') 'DEBUG get_LL_R: l=', l, ' block size=', cnt, ' expected=', expected
+    end do
+  end subroutine get_LL_R
 
   !================================================!
   !                   PUBLIC PROCEDURES
