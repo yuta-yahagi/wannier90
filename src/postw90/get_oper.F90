@@ -1803,6 +1803,25 @@ contains
     end if
 
     if (on_root) then
+      if (pw90_oper_read%write_orb) then
+        if (pw90_oper_read%orb_formatted) then
+          inquire (file=trim(seedname)//'.orb.fmt', exist=have_orb_file)
+          if (.not. have_orb_file) then
+            call set_error_file(error, 'Error: Problem opening input file '//trim(seedname)//'.orb.fmt', comm)
+            call set_error_fatal(error, 'write_orb=.true. requires file '//trim(seedname)//'.orb.fmt', comm)
+            return
+          end if
+          write (stdout, '(a)') ' Reading orbital matrices from '//trim(seedname)//'.orb.fmt in get_SS_R : '
+        else
+          inquire (file=trim(seedname)//'.orb', exist=have_orb_file)
+          if (.not. have_orb_file) then
+            call set_error_file(error, 'Error: Problem opening input file '//trim(seedname)//'.orb', comm)
+            call set_error_fatal(error, 'write_orb=.true. requires file '//trim(seedname)//'.orb', comm)
+            return
+          end if
+          write (stdout, '(a)') ' Reading orbital matrices from '//trim(seedname)//'.orb in get_SS_R : '
+        end if
+      end if
 
       allocate (spn_o(num_bands, num_bands, num_kpts, 3))
       allocate (SS_q(num_wann, num_wann, num_kpts, 3))
