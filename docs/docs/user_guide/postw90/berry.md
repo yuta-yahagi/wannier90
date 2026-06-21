@@ -417,6 +417,36 @@ or
 > principles using maximally localized Wannier functions*,
 > Phys. Rev. B. 99, 235113 (2019), DOI:10.1103/PhysRevB.99.235113.
 
+## `berry_task=ohc`: orbital Hall conductivity {#sec:ohc}
+
+The intrinsic orbital Hall conductivity (OHC) is evaluated with the *same*
+Berry-curvature-like Kubo formula as the spin Hall conductivity
+(Eq. $\eqref{eq:kubo_shc}$), with the spin operator $\sigma_\gamma$ replaced by
+the orbital angular momentum operator $L_\gamma$. The orbital current operator
+is the anticommutator
+$$
+j^{L,\gamma}_\alpha = \tfrac{1}{2}\{v_\alpha, L_\gamma\},
+$$
+and the resulting orbital Berry curvature is summed over occupied states exactly
+as for the SHC. Output is written to `seedname-ohc-fermiscan.dat`
+(or `seedname-ohc-freqscan.dat` if `ohc_freq_scan = true`), in the same units
+$(\hbar/e)\,\mathrm{S/cm}$ as the SHC; only the operator prefactor differs (the
+spin factor $\hbar/2$ becomes $\hbar$, since $L$ is already in units of $\hbar$).
+
+The tensor components are selected by `ohc_alpha` (current direction),
+`ohc_beta` (applied electric-field direction) and `ohc_gamma` (orbital-momentum
+direction), in direct analogy with `shc_alpha/beta/gamma`; the defaults
+$(\alpha,\beta,\gamma)=(1,2,3)$ give $\sigma^{L,z}_{xy}$.
+
+The orbital angular momentum operator is built in the **atomic-centered
+approximation**: each Wannier function is assigned the intra-atomic $L$ matrix
+of its dominant projection orbital, taken from the `projections` block (so a
+`projections` block defining the $l$ character of every Wannier function is
+required, e.g. `Pt: d;s;p`). This intra-atomic contribution dominates the OHC of
+transition metals such as fcc Pt. No additional `pw2wannier90` files (no `.spn`)
+are needed. See tutorial [29](../../tutorials/tutorial_29.md), whose fcc-Pt setup
+can be reused by replacing `berry_task = eval_shc` with `berry_task = eval_ohc`.
+
 ## `berry_task=sc`: shift current
 
 The shift-current contribution to the second-order response is

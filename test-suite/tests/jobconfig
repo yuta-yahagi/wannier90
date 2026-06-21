@@ -475,6 +475,12 @@ program = POSTW90_SHCFERMIDAT_OK
 inputs_args = ('Pt.win', '')
 output = Pt-shc-fermiscan.dat
 
+# Test of orbital Hall conductivity (OHC) for fcc platinum
+[testpostw90_pt_ohc/]
+program = POSTW90_OHCFERMIDAT_OK
+inputs_args = ('Pt.win', '')
+output = Pt-ohc-fermiscan.dat
+
 # Test of ac SHC for GaAs
 [testpostw90_gaas_shc/]
 program = POSTW90_SHCFREQDAT_OK

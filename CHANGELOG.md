@@ -1,5 +1,16 @@
 # CHANGELOG of Wannier90
 
+## Unreleased
+
+### New features
+
+- Calculation of the intrinsic orbital Hall conductivity (OHC) in `postw90`
+  (`berry_task = eval_ohc`), reusing the spin Hall Kubo machinery with the
+  atomic-centered orbital angular momentum operator `L` in place of the spin
+  operator. New keywords `ohc_alpha`, `ohc_beta`, `ohc_gamma`, `ohc_freq_scan`;
+  output written to `seedname-ohc-fermiscan.dat` / `seedname-ohc-freqscan.dat`.
+  Added the `testpostw90_pt_ohc` regression test (fcc Pt).
+
 ## v3.1.0 (5th March 2020)
 
 ### New features
