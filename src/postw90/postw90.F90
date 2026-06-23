@@ -50,7 +50,10 @@ program postw90
   use w90_postw90_readwrite
   use w90_postw90_types
   use w90_readwrite, only: w90_readwrite_read_chkpt, w90_readwrite_write_header, &
-                           w90_readwrite_in_file, w90_readwrite_clean_infile, w90_readwrite_read_final_alloc
+                           w90_readwrite_in_file, w90_readwrite_clean_infile, &
+                           w90_readwrite_read_final_alloc, w90_readwrite_get_projections
+  use w90_get_oper, only: set_projection_qnums
+  use w90_utility, only: utility_recip_lattice_base
   use w90_spin
   use w90_types
 
@@ -142,6 +145,14 @@ program postw90
   type(ws_region_type) :: ws_region
   type(settings_type) :: settings
   !! container for input file (.win) data and options set via library interface
+
+  ! Per-Wannier-function orbital character for the orbital Hall effect
+  ! (berry_task = eval_ohc); derived from the <projections> block.
+  type(proj_type), allocatable :: proj_input(:)
+  integer :: num_proj, iw
+  real(kind=dp) :: recip_lattice_ohc(3, 3), volume_ohc
+  integer, allocatable :: wf_l(:), wf_mr(:), wf_spin(:)
+  real(kind=dp), allocatable :: wf_site(:, :)
 
   integer :: num_bands
   !! Number of bands
@@ -286,6 +297,40 @@ program postw90
                                   write_data, gamma_only, physics%bohr, optimisation, stdout, &
                                   seedname, error, comm)
   if (allocated(error)) call print_error_halt(error, ierr, stdout, stderr, comm)
+
+  ! For the orbital Hall effect (berry_task = eval_ohc) we need the orbital
+  ! character (l, mr index, spin, site) of each Wannier function. Derive it from
+  ! the <projections> block and hand it to get_LL_R via set_projection_qnums.
+  ! (atomic-centered approximation: each WF carries its projection's orbital).
+  if (pw90_calcs%berry .and. index(berry%task, 'ohc') > 0) then
+    num_proj = num_wann
+    call utility_recip_lattice_base(real_lattice, recip_lattice_ohc, volume_ohc)
+    ! first pass: count projections; second pass: fill proj_input
+    call w90_readwrite_get_projections(settings, num_proj, atoms, num_wann, proj_input, &
+                                       recip_lattice_ohc, .true., system%spinors, physics%bohr, &
+                                       stdout, error, comm)
+    if (allocated(error)) call print_error_halt(error, ierr, stdout, stderr, comm)
+    call w90_readwrite_get_projections(settings, num_proj, atoms, num_wann, proj_input, &
+                                       recip_lattice_ohc, .false., system%spinors, physics%bohr, &
+                                       stdout, error, comm)
+    if (allocated(error)) call print_error_halt(error, ierr, stdout, stderr, comm)
+    if (num_proj == num_wann .and. allocated(proj_input)) then
+      allocate (wf_l(num_wann), wf_mr(num_wann), wf_spin(num_wann), wf_site(3, num_wann))
+      do iw = 1, num_wann
+        wf_l(iw) = proj_input(iw)%l
+        wf_mr(iw) = proj_input(iw)%m
+        if (system%spinors) then
+          wf_spin(iw) = proj_input(iw)%s
+        else
+          wf_spin(iw) = 1
+        end if
+        wf_site(:, iw) = proj_input(iw)%site(:)
+      end do
+      call set_projection_qnums(wf_l, wf_mr, wf_spin, wf_site, error, comm)
+      if (allocated(error)) call print_error_halt(error, ierr, stdout, stderr, comm)
+      deallocate (wf_l, wf_mr, wf_spin, wf_site)
+    end if
+  end if
 
   call w90_readwrite_clean_infile(settings, stdout, seedname, error, comm)
   if (allocated(error)) call print_error_halt(error, ierr, stdout, stderr, comm)

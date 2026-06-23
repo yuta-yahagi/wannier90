@@ -204,6 +204,14 @@ extract_fn = tools parsers.parse_shc_dat.parse
 tolerance = ( (1.0e-6, 5.0e-6, 'energy'),
               (1.0e-1, 1.0e-1, 'shc'))
 
+# Orbital Hall conductivity Fermi scan: same file format as the spin Hall
+# fermiscan output, so the same parser is reused (key 'shc' = 3rd column).
+[POSTW90_OHCFERMIDAT_OK]
+exe = ../../postw90.x
+extract_fn = tools parsers.parse_shc_dat.parse
+tolerance = ( (1.0e-6, 5.0e-6, 'energy'),
+              (1.0e-1, 1.0e-1, 'shc'))
+
 [POSTW90_SHCFREQDAT_OK]
 exe = ../../postw90.x
 extract_fn = tools parsers.parse_shc_dat.parse

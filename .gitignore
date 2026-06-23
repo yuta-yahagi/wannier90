@@ -5,6 +5,7 @@ make.inc
 postw90.x
 w90chk2chk.x
 w90spn2spn.x
+w90orb2orb.x
 wannier90.x
 *~
 *.x.dSYM

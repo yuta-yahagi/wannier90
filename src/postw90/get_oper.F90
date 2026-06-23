@@ -52,103 +52,51 @@ module w90_get_oper
   private :: fourier_q_to_R
   private :: get_win_min
   private :: get_local_lmat_wan90
-  private :: place_lmat_block_wan90
+  private :: build_cmat_wan90
 
   integer :: nno, nn1o, nn2o
-  integer, allocatable :: proj_l_qnums(:)
-  integer, allocatable :: proj_spin_order(:)
-  integer :: spinor_ordering_mode = 0 ! 0:auto, 1:block(up...down), 2:alternating(up,down,...)
+  ! Per-Wannier-function orbital character used by get_LL_R to build the
+  ! atomic-centered orbital angular momentum operator L (orbital Hall effect).
+  ! These are populated from the <projections> block via set_projection_qnums(),
+  ! called from the postw90 driver when an orbital-Hall task is requested.
+  integer, allocatable :: proj_l_qnums(:)         ! l quantum number of each WF
+  integer, allocatable :: proj_m_qnums(:)         ! mr index (1..2l+1) within the l-shell
+  integer, allocatable :: proj_spin_order(:)      ! spin label of each WF (+1 up, -1 down)
+  real(kind=dp), allocatable :: proj_site_qnums(:, :) ! fractional site of each WF (3, nwf)
+  logical :: proj_qnums_set = .false.             ! .true. once projection data is stored
 
   public :: set_projection_qnums
-  public :: set_spinor_ordering
   public :: get_LL_R
 
 contains
 
-  subroutine set_projection_qnums(qnums_l, spin_order, error, comm)
-    integer, intent(in) :: qnums_l(:)
-    integer, intent(in), optional :: spin_order(:)
+  subroutine set_projection_qnums(qnums_l, qnums_m, spin_order, sites, error, comm)
+    !! Store, for each Wannier function, the orbital character (l, mr index,
+    !! spin label, fractional site) derived from the <projections> block.
+    !! Used by get_LL_R for the atomic-centered orbital angular momentum.
+    integer, intent(in) :: qnums_l(:), qnums_m(:), spin_order(:)
+    real(kind=dp), intent(in) :: sites(:, :)
     type(w90_comm_type), intent(in) :: comm
     type(w90_error_type), allocatable, intent(out) :: error
-    integer :: ierr
+    integer :: nwf, ierr
 
-    if (allocated(proj_l_qnums)) then
-      deallocate (proj_l_qnums, stat=ierr)
-      if (ierr /= 0) call set_error_dealloc(error, 'Error deallocating proj_l_qnums in set_projection_qnums', comm)
-    end if
-    allocate (proj_l_qnums(size(qnums_l)), stat=ierr)
+    nwf = size(qnums_l)
+    if (allocated(proj_l_qnums)) deallocate (proj_l_qnums)
+    if (allocated(proj_m_qnums)) deallocate (proj_m_qnums)
+    if (allocated(proj_spin_order)) deallocate (proj_spin_order)
+    if (allocated(proj_site_qnums)) deallocate (proj_site_qnums)
+    allocate (proj_l_qnums(nwf), proj_m_qnums(nwf), proj_spin_order(nwf), &
+              proj_site_qnums(3, nwf), stat=ierr)
     if (ierr /= 0) then
-      call set_error_alloc(error, 'Error allocating proj_l_qnums in set_projection_qnums', comm)
+      call set_error_alloc(error, 'Error allocating projection qnums in set_projection_qnums', comm)
       return
     end if
     proj_l_qnums(:) = qnums_l(:)
-
-    if (present(spin_order)) then
-      if (allocated(proj_spin_order)) then
-        deallocate (proj_spin_order, stat=ierr)
-        if (ierr /= 0) call set_error_dealloc(error, 'Error deallocating proj_spin_order in set_projection_qnums', comm)
-      end if
-      allocate (proj_spin_order(size(spin_order)), stat=ierr)
-      if (ierr /= 0) then
-        call set_error_alloc(error, 'Error allocating proj_spin_order in set_projection_qnums', comm)
-        return
-      end if
-      proj_spin_order(:) = spin_order(:)
-    end if
+    proj_m_qnums(:) = qnums_m(:)
+    proj_spin_order(:) = spin_order(:)
+    proj_site_qnums(:, :) = sites(:, :)
+    proj_qnums_set = .true.
   end subroutine set_projection_qnums
-
-  subroutine set_spinor_ordering(mode)
-    integer, intent(in) :: mode
-    spinor_ordering_mode = mode
-  end subroutine set_spinor_ordering
-
-  subroutine get_LL_R(LL_R, num_wann, stdout, error, comm)
-    complex(kind=dp), intent(inout) :: LL_R(:, :)
-    integer, intent(in) :: num_wann, stdout
-    type(w90_comm_type), intent(in) :: comm
-    type(w90_error_type), allocatable, intent(out) :: error
-    integer :: i, l, cnt, expected, s
-    logical :: block_ok, alt_ok
-
-    if (.not. allocated(proj_l_qnums)) then
-      call set_error_fatal(error, 'Error in get_LL_R: qnums(:,3)=l data is not set', comm)
-      return
-    end if
-    if (size(proj_l_qnums) < num_wann) then
-      call set_error_fatal(error, 'Error in get_LL_R: qnums(:,3)=l array is smaller than num_wann', comm)
-      return
-    end if
-    if (.not. allocated(proj_spin_order)) then
-      call set_error_fatal(error, 'Error in get_LL_R: spinor ordering data is not set', comm)
-      return
-    end if
-
-    block_ok = .true.; alt_ok = .true.
-    do i = 1, min(num_wann, size(proj_spin_order))
-      s = proj_spin_order(i)
-      if (i <= num_wann/2) then
-        if (s /= 1) block_ok = .false.
-      else
-        if (s /= -1) block_ok = .false.
-      end if
-      if (mod(i, 2) == 1) then
-        if (s /= 1) alt_ok = .false.
-      else
-        if (s /= -1) alt_ok = .false.
-      end if
-    end do
-    if ((spinor_ordering_mode == 1 .and. .not. block_ok) .or. (spinor_ordering_mode == 2 .and. .not. alt_ok) .or. &
-        (spinor_ordering_mode == 0 .and. .not. (block_ok .or. alt_ok))) then
-      call set_error_fatal(error, 'spinor ordering incompatible with orbital block construction', comm)
-      return
-    end if
-
-    do l = 0, 2
-      cnt = count(proj_l_qnums(1:num_wann) == l)
-      expected = 2*l + 1
-      write (stdout, '(A,I1,A,I0,A,I0)') 'DEBUG get_LL_R: l=', l, ' block size=', cnt, ' expected=', expected
-    end do
-  end subroutine get_LL_R
 
   !================================================!
   !                   PUBLIC PROCEDURES
@@ -1787,7 +1735,7 @@ contains
     real(kind=dp)                 :: s_real, s_img
     integer, allocatable          :: num_states(:)
     integer                       :: m, n, spn_in, ik, is, &
-                                     nb_tmp, nkp_tmp, ierr, s, counter, s_type
+                                     nb_tmp, nkp_tmp, ierr, s, counter
     character(len=60)             :: header
     logical :: on_root = .false.
 
@@ -1805,26 +1753,6 @@ contains
     end if
 
     if (on_root) then
-      if (pw90_oper_read%write_orb) then
-        if (pw90_oper_read%orb_formatted) then
-          inquire (file=trim(seedname)//'.orb.fmt', exist=have_orb_file)
-          if (.not. have_orb_file) then
-            call set_error_file(error, 'Error: Problem opening input file '//trim(seedname)//'.orb.fmt', comm)
-            call set_error_fatal(error, 'write_orb=.true. requires file '//trim(seedname)//'.orb.fmt', comm)
-            return
-          end if
-          write (stdout, '(a)') ' Reading orbital matrices from '//trim(seedname)//'.orb.fmt in get_SS_R : '
-        else
-          inquire (file=trim(seedname)//'.orb', exist=have_orb_file)
-          if (.not. have_orb_file) then
-            call set_error_file(error, 'Error: Problem opening input file '//trim(seedname)//'.orb', comm)
-            call set_error_fatal(error, 'write_orb=.true. requires file '//trim(seedname)//'.orb', comm)
-            return
-          end if
-          write (stdout, '(a)') ' Reading orbital matrices from '//trim(seedname)//'.orb in get_SS_R : '
-        end if
-      end if
-
       allocate (spn_o(num_bands, num_bands, num_kpts, 3))
       allocate (SS_q(num_wann, num_wann, num_kpts, 3))
 
@@ -1840,15 +1768,6 @@ contains
       ! Read from .spn file the original spin matrices <psi_nk|sigma_i|psi_mk>
       ! (sigma_i = Pauli matrix) between ab initio eigenstates
       !
-      if (trim(pw90_oper_read%orb_spin_order) == 'half_split') then
-        s_type = 0
-      elseif (trim(pw90_oper_read%orb_spin_order) == 'alternating') then
-        s_type = 1
-      else
-        call set_error_fatal(error, 'Error in get_SS_R: orb_spin_order must be one of: half_split, alternating', comm)
-        return
-      end if
-
       if (pw90_oper_read%spn_formatted) then
         open (newunit=spn_in, file=trim(seedname)//'.spn', form='formatted', &
               status='old', err=109)
@@ -1984,7 +1903,7 @@ contains
     complex(kind=dp), allocatable :: LL_q(:, :, :, :)
     complex(kind=dp), allocatable :: LL_R_temp(:, :, :, :)
     complex(kind=dp), allocatable :: lmat_local(:, :, :)
-    integer :: ist
+    integer :: n, m, ln, mrn, mrm, idir
     logical :: on_root = .false.
 
     if (mpirank(comm) == 0) on_root = .true.
@@ -2007,12 +1926,37 @@ contains
     LL_q = cmplx_0
 
     if (on_root) then
-      ! Minimal on-site model: fill each Wannier with l=0 shell (L=0).
+      ! Atomic-centered orbital angular momentum operator (on-site, hence
+      ! k-independent in the Wannier gauge). For each pair of Wannier functions
+      ! that share the same atomic site, the same l-shell and the same spin, the
+      ! matrix element <n|L|m> is the atomic L-matrix element between their
+      ! mr-indices (wannier90 real-harmonic ordering). L is the identity in spin,
+      ! so up- and down-spin blocks are filled independently and never coupled.
       ! Units are hbar (dimensionless), consistently for LL_q and LL_R.
-      do ist = 1, num_wann
-        allocate (lmat_local(1, 1, 3))
-        call get_local_lmat_wan90(0, lmat_local)
-        call place_lmat_block_wan90(LL_q, ist, ist, 0, 0, lmat_local, num_wann, num_kpts)
+      if (.not. proj_qnums_set) then
+        call set_error_fatal(error, 'get_LL_R: orbital character of the Wannier functions is not '// &
+                             'available. The <projections> block (defining l of each WF) is required '// &
+                             'for the orbital Hall effect (berry_task = eval_ohc).', comm)
+        return
+      end if
+      if (size(proj_l_qnums) /= num_wann) then
+        call set_error_fatal(error, 'get_LL_R: number of projections does not match num_wann; '// &
+                             'eval_ohc requires one projection per Wannier function.', comm)
+        return
+      end if
+      do n = 1, num_wann
+        ln = proj_l_qnums(n)
+        mrn = proj_m_qnums(n)
+        call get_local_lmat_wan90(ln, lmat_local)
+        do m = 1, num_wann
+          if (proj_l_qnums(m) /= ln) cycle
+          if (proj_spin_order(m) /= proj_spin_order(n)) cycle
+          if (maxval(abs(proj_site_qnums(:, m) - proj_site_qnums(:, n))) > 1.0e-4_dp) cycle
+          mrm = proj_m_qnums(m)
+          do idir = 1, 3
+            LL_q(n, m, :, idir) = lmat_local(mrn, mrm, idir)
+          end do
+        end do
         deallocate (lmat_local)
       end do
 
@@ -2043,6 +1987,13 @@ contains
   end subroutine get_LL_R
 
   subroutine get_local_lmat_wan90(l, lmat_local)
+    !! Build the (2l+1)x(2l+1)x3 orbital angular momentum matrices Lx,Ly,Lz
+    !! (in units of hbar) for a single l-shell, expressed in the wannier90 real
+    !! spherical harmonic basis ordered by the mr index (mr=1..2l+1):
+    !!   mr=1 -> m=0; mr=2k -> cos(+|m|=k); mr=2k+1 -> sin(-|m|=k).
+    !! The matrices are first built in the complex |l,m> basis and rotated to
+    !! the real basis via  L_real = conjg(C) . L_complex . transpose(C),
+    !! where C maps a real harmonic (row) onto the complex |l,m> (column).
     implicit none
     integer, intent(in) :: l
     complex(kind=dp), allocatable, intent(out) :: lmat_local(:, :, :)
@@ -2059,67 +2010,50 @@ contains
     lm_c = cmplx_0
     cmat = cmplx_0
 
+    ! L operators in the complex |l,m> basis (column index = m+l+1)
     do m = -l, l
       lz_c(m + l + 1, m + l + 1) = cmplx(real(m, dp), 0.0_dp, dp)
+      ! L_+ |l,m> = sqrt(l(l+1)-m(m+1)) |l,m+1>
       if (m < l) lp_c(m + l + 2, m + l + 1) = cmplx(sqrt(real(l*(l + 1) - m*(m + 1), dp)), 0.0_dp, dp)
+      ! L_- |l,m> = sqrt(l(l+1)-m(m-1)) |l,m-1>
       if (m > -l) lm_c(m + l, m + l + 1) = cmplx(sqrt(real(l*(l + 1) - m*(m - 1), dp)), 0.0_dp, dp)
     end do
     lx_c = 0.5_dp*(lp_c + lm_c)
     ly_c = -0.5_dp*cmplx_i*(lp_c - lm_c)
 
     call build_cmat_wan90(l, cmat)
-    lmat_local(:, :, 1) = matmul(cmat, matmul(lx_c, conjg(transpose(cmat))))
-    lmat_local(:, :, 2) = matmul(cmat, matmul(ly_c, conjg(transpose(cmat))))
-    lmat_local(:, :, 3) = matmul(cmat, matmul(lz_c, conjg(transpose(cmat))))
+    lmat_local(:, :, 1) = matmul(conjg(cmat), matmul(lx_c, transpose(cmat)))
+    lmat_local(:, :, 2) = matmul(conjg(cmat), matmul(ly_c, transpose(cmat)))
+    lmat_local(:, :, 3) = matmul(conjg(cmat), matmul(lz_c, transpose(cmat)))
   end subroutine get_local_lmat_wan90
 
   subroutine build_cmat_wan90(l, cmat)
+    !! Change-of-basis matrix C from the wannier90 real spherical harmonics
+    !! (row index = mr = 1..2l+1) to the complex harmonics |l,m> (column index
+    !! = m+l+1). Real harmonic ordering follows wannier90:
+    !!   mr=1   : Y_{l,0}
+    !!   mr=2k  : (1/sqrt2) ( Y_{l,-k} + (-1)^k Y_{l,+k} )        [cos, +|m|=k]
+    !!   mr=2k+1: (i/sqrt2) ( Y_{l,-k} - (-1)^k Y_{l,+k} )        [sin, -|m|=k]
     implicit none
     integer, intent(in) :: l
     complex(kind=dp), intent(inout) :: cmat(:, :)
-    integer :: n, idx, mp
-    n = 2*l + 1
+    integer :: k
+    real(kind=dp) :: rt2inv, sgn
+
     cmat = cmplx_0
-    if (l == 0) then
-      cmat(1, 1) = cmplx_1
-      return
-    end if
-    idx = 1
-    do mp = 1, l
-      cmat(idx, l + 1 + mp) = cmplx(1.0_dp/sqrt(2.0_dp), 0.0_dp, dp)
-      cmat(idx, l + 1 - mp) = cmplx((-1.0_dp)**mp/sqrt(2.0_dp), 0.0_dp, dp)
-      idx = idx + 1
-    end do
-    cmat(idx, l + 1) = cmplx_1
-    idx = idx + 1
-    do mp = 1, l
-      cmat(idx, l + 1 + mp) = cmplx(0.0_dp, -1.0_dp/sqrt(2.0_dp), dp)
-      cmat(idx, l + 1 - mp) = cmplx(0.0_dp, (-1.0_dp)**mp/sqrt(2.0_dp), dp)
-      idx = idx + 1
+    rt2inv = 1.0_dp/sqrt(2.0_dp)
+    ! mr = 1 : m = 0
+    cmat(1, l + 1) = cmplx_1
+    do k = 1, l
+      sgn = real((-1)**k, dp)
+      ! mr = 2k : cosine combination (+|m| = k)
+      cmat(2*k, l + 1 - k) = cmplx(rt2inv, 0.0_dp, dp)
+      cmat(2*k, l + 1 + k) = cmplx(sgn*rt2inv, 0.0_dp, dp)
+      ! mr = 2k+1 : sine combination (-|m| = k)
+      cmat(2*k + 1, l + 1 - k) = cmplx(0.0_dp, rt2inv, dp)
+      cmat(2*k + 1, l + 1 + k) = cmplx(0.0_dp, -sgn*rt2inv, dp)
     end do
   end subroutine build_cmat_wan90
-
-  subroutine place_lmat_block_wan90(LL_q, ioff, joff, s_type_i, s_type_j, lmat_local, num_wann, num_kpts)
-    implicit none
-    integer, intent(in) :: ioff, joff, s_type_i, s_type_j, num_wann, num_kpts
-    complex(kind=dp), intent(inout) :: LL_q(:, :, :, :)
-    complex(kind=dp), intent(in) :: lmat_local(:, :, :)
-    integer :: nloc, a, b, ik
-    nloc = size(lmat_local, 1)
-    do ik = 1, num_kpts
-      do a = 1, nloc
-        do b = 1, nloc
-          if (ioff + a - 1 <= num_wann .and. joff + b - 1 <= num_wann) then
-            LL_q(ioff + a - 1, joff + b - 1, ik, :) = lmat_local(a, b, :)
-          end if
-        end do
-      end do
-    end do
-    if (s_type_i == 1 .or. s_type_j == 1) then
-      ! Reserved for alternate spin-ordering convention (s_type=1).
-      ! Current implementation uses identical ordering to s_type=0.
-    end if
-  end subroutine place_lmat_block_wan90
 
   !================================================
   subroutine get_SHC_R(dis_manifold, kmesh_info, kpt_latt, print_output, pw90_oper_read, &
@@ -3410,38 +3344,6 @@ contains
     return !jj fixme restructure
 
   end subroutine get_SAA_R
-
-  !================================================
-  subroutine get_local_lmat_wan90(num_m, lmat_in, umat, lmat_out, error, comm)
-    !================================================
-    !! lmat_out = U^\dagger lmat_in U
-    !! Hermitian; unit = hbar or dimensionless.
-    !================================================
-    use w90_utility, only: utility_zgemmm
-    implicit none
-    integer, intent(in) :: num_m
-    complex(kind=dp), intent(in) :: lmat_in(num_m, num_m, 3), umat(num_m, num_m)
-    complex(kind=dp), intent(out) :: lmat_out(num_m, num_m, 3)
-    type(w90_comm_type), intent(in) :: comm
-    type(w90_error_type), allocatable, intent(out) :: error
-    complex(kind=dp), allocatable :: ltmp(:, :)
-    integer :: idir, ierr
-
-    allocate (ltmp(num_m, num_m), stat=ierr)
-    if (ierr /= 0) then
-      call set_error_alloc(error, 'Error in allocating ltmp in get_local_lmat_wan90', comm)
-      return
-    end if
-
-    lmat_out = cmplx_0
-    do idir = 1, 3
-      call utility_zgemmm(lmat_in(:, :, idir), 'N', umat(:, :), 'N', ltmp(:, :))
-      call utility_zgemmm(umat(:, :), 'C', ltmp(:, :), 'N', lmat_out(:, :, idir))
-    end do
-
-    deallocate (ltmp, stat=ierr)
-    if (ierr /= 0) call set_error_dealloc(error, 'Error in deallocating ltmp in get_local_lmat_wan90', comm)
-  end subroutine get_local_lmat_wan90
 
   !================================================!
   !                   PRIVATE PROCEDURES

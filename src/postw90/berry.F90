@@ -219,6 +219,13 @@ contains
     ! for fermi energy scan, adaptive kmesh
     real(kind=dp), allocatable :: shc_k_fermi_dummy(:)
 
+    ! Orbital Hall conductivity (same Kubo machinery as SHC, orbital operator L
+    ! in place of the spin operator; atomic-centered L from get_LL_R)
+    real(kind=dp), allocatable :: ohc_fermi(:), ohc_k_fermi(:)
+    complex(kind=dp), allocatable :: ohc_freq(:), ohc_k_freq(:)
+    real(kind=dp), allocatable :: ohc_k_fermi_dummy(:)
+    complex(kind=dp), allocatable :: LL_R(:, :, :, :) ! <0n|L_x,y,z|Rm> [hbar]
+
     real(kind=dp) :: cell_volume
     real(kind=dp) :: kweight, kweight_adpt, kpt(3), db1, db2, db3, fac, rdum, vdum(3)
 
@@ -229,6 +236,7 @@ contains
     character(len=120) :: file_name
 
     logical :: eval_ahc, eval_morb, eval_kubo, not_scannable, eval_sc, eval_shc, eval_kdotp
+    logical :: eval_ohc
     logical :: ladpt_kmesh
     logical :: ladpt(fermi_n)
 
@@ -262,6 +270,7 @@ contains
     eval_sc = .false.
     eval_shc = .false.
     eval_kdotp = .false.
+    eval_ohc = .false.
 
     if (index(pw90_berry%task, 'ahc') > 0) eval_ahc = .true.
     if (index(pw90_berry%task, 'morb') > 0) eval_morb = .true.
@@ -269,6 +278,7 @@ contains
     if (index(pw90_berry%task, 'sc') > 0) eval_sc = .true.
     if (index(pw90_berry%task, 'shc') > 0) eval_shc = .true.
     if (index(pw90_berry%task, 'kdotp') > 0) eval_kdotp = .true.
+    if (index(pw90_berry%task, 'ohc') > 0) eval_ohc = .true.
 
     ! Wannier matrix elements, allocations and initializations
     !
@@ -323,7 +333,8 @@ contains
 
     ! List here berry_tasks that assume nfermi=1
     !
-    not_scannable = eval_kubo .or. (eval_shc .and. pw90_spin_hall%freq_scan)
+    not_scannable = eval_kubo .or. (eval_shc .and. pw90_spin_hall%freq_scan) &
+                    .or. (eval_ohc .and. pw90_spin_hall%freq_scan)
     if (not_scannable .and. fermi_n .ne. 1) then
       call set_error_input(error, 'The berry_task(s, comm, comm) you chose require that you specify a single ' &
                            //'Fermi energy: scanning the Fermi energy is not implemented', comm)
@@ -455,6 +466,47 @@ contains
 
     end if
 
+    if (eval_ohc) then
+      ! Orbital Hall conductivity: identical Kubo machinery as the spin Hall
+      ! conductivity, with the spin operator replaced by the orbital angular
+      ! momentum operator L (atomic-centered approximation, built by get_LL_R).
+      ! Needs only HH_R (bands/velocity), AA_R (Berry connection) and LL_R.
+      call get_HH_R(dis_manifold, kpt_latt, print_output, wigner_seitz, HH_R, u_matrix, v_matrix, &
+                    eigval, real_lattice, scissors_shift, num_bands, num_kpts, num_wann, &
+                    num_valence_bands, effective_model, have_disentangled, seedname, ws_distance, ws_region, &
+                    stdout, timer, error, comm)
+      if (allocated(error)) return
+      if (effective_model) then
+        call get_AA_R_effective(print_output, AA_R, HH_R, wigner_seitz%nrpts, num_wann, seedname, &
+                                stdout, timer, error, comm)
+      else
+        call get_AA_R(pw90_berry, dis_manifold, kmesh_info, kpt_latt, print_output, wannier_data, AA_R, &
+                      v_matrix, eigval, wigner_seitz, ws_distance, ws_region, num_bands, num_kpts, &
+                      num_wann, have_disentangled, seedname, stdout, timer, error, comm)
+      end if
+      if (allocated(error)) return
+      call get_LL_R(kpt_latt, print_output, LL_R, wigner_seitz, ws_distance, ws_region, &
+                    num_kpts, num_wann, timer, error, comm)
+      if (allocated(error)) return
+
+      if (pw90_spin_hall%freq_scan) then
+        allocate (ohc_freq(pw90_berry%kubo_nfreq))
+        allocate (ohc_k_freq(pw90_berry%kubo_nfreq))
+        ohc_freq = 0.0_dp
+        ohc_k_freq = 0.0_dp
+      else
+        allocate (ohc_fermi(fermi_n))
+        allocate (ohc_k_fermi(fermi_n))
+        allocate (ohc_k_fermi_dummy(fermi_n))
+        ohc_fermi = 0.0_dp
+        ohc_k_fermi = 0.0_dp
+        !only used for fermiscan & adpt kmesh
+        ohc_k_fermi_dummy = 0.0_dp
+        adpt_counter_list = 0
+      end if
+
+    end if
+
     if (eval_kdotp) then
       call get_HH_R(dis_manifold, kpt_latt, print_output, wigner_seitz, HH_R, u_matrix, v_matrix, &
                     eigval, real_lattice, scissors_shift, num_bands, num_kpts, num_wann, &
@@ -500,6 +552,16 @@ contains
         else
           write (stdout, '(/,3x,a)') '  Ryoo''s SHC (Phys.Rev.B 99.235113)'
         end if
+        if (pw90_spin_hall%freq_scan) then
+          write (stdout, '(/,3x,a)') '  Frequency scan'
+        else
+          write (stdout, '(/,3x,a)') '  Fermi energy scan'
+        end if
+      end if
+
+      if (eval_ohc) then
+        write (stdout, '(/,3x,a)') '* Orbital Hall Conductivity'
+        write (stdout, '(/,3x,a)') '  Atomic-centered orbital angular momentum (L) operator'
         if (pw90_spin_hall%freq_scan) then
           write (stdout, '(/,3x,a)') '  Frequency scan'
         else
@@ -781,6 +843,62 @@ contains
           end if
         end if
 
+        if (eval_ohc) then
+          if (print_output%iprint > 0) then
+            call berry_print_progress(kpoint_dist%num_int_kpts_on_node(my_node_id), loop_xyz, &
+                                      1, 1, stdout)
+          end if
+          if (.not. pw90_spin_hall%freq_scan) then
+            call berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                     pw90_band_deriv_degen, ws_region, pw90_spin_hall, print_output, &
+                                     wannier_data, ws_distance, wigner_seitz, AA_R, HH_R, LL_R, &
+                                     u_matrix, v_matrix, eigval, kpt, real_lattice, scissors_shift, &
+                                     mp_grid, fermi_n, num_bands, num_kpts, num_wann, &
+                                     num_valence_bands, effective_model, have_disentangled, &
+                                     seedname, stdout, timer, error, comm, ohc_k_fermi=ohc_k_fermi)
+            if (allocated(error)) return
+            ladpt_kmesh = .false.
+            if (pw90_berry%curv_adpt_kmesh > 1) then
+              do if = 1, fermi_n
+                rdum = abs(ohc_k_fermi(if))
+                if (pw90_berry%curv_unit == 'bohr2') rdum = rdum/physics%bohr**2
+                if (rdum > pw90_berry%curv_adpt_kmesh_thresh) then
+                  adpt_counter_list(1) = adpt_counter_list(1) + 1
+                  ladpt_kmesh = .true.
+                  exit
+                end if
+              end do
+            end if
+            if (ladpt_kmesh) then
+              do loop_adpt = 1, pw90_berry%curv_adpt_kmesh**3
+                call berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                         pw90_band_deriv_degen, ws_region, pw90_spin_hall, &
+                                         print_output, wannier_data, ws_distance, wigner_seitz, &
+                                         AA_R, HH_R, LL_R, u_matrix, v_matrix, eigval, &
+                                         kpt(:) + adkpt(:, loop_adpt), real_lattice, scissors_shift, &
+                                         mp_grid, fermi_n, num_bands, num_kpts, num_wann, &
+                                         num_valence_bands, effective_model, have_disentangled, &
+                                         seedname, stdout, timer, error, comm, &
+                                         ohc_k_fermi=ohc_k_fermi_dummy)
+                if (allocated(error)) return
+                ohc_fermi = ohc_fermi + kweight_adpt*ohc_k_fermi_dummy
+              end do
+            else
+              ohc_fermi = ohc_fermi + kweight*ohc_k_fermi
+            end if
+          else ! freq_scan, no adaptive kmesh
+            call berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                     pw90_band_deriv_degen, ws_region, pw90_spin_hall, print_output, &
+                                     wannier_data, ws_distance, wigner_seitz, AA_R, HH_R, LL_R, &
+                                     u_matrix, v_matrix, eigval, kpt, real_lattice, scissors_shift, &
+                                     mp_grid, fermi_n, num_bands, num_kpts, num_wann, &
+                                     num_valence_bands, effective_model, have_disentangled, &
+                                     seedname, stdout, timer, error, comm, ohc_k_freq=ohc_k_freq)
+            if (allocated(error)) return
+            ohc_freq = ohc_freq + kweight*ohc_k_freq
+          end if
+        end if
+
       end do !loop_xyz
 
     else! Do not read 'kpoint.dat'. Loop over a regular grid in the full BZ
@@ -989,6 +1107,62 @@ contains
           end if
         end if
 
+        if (eval_ohc) then
+          if (print_output%iprint > 0) then
+            call berry_print_progress(PRODUCT(pw90_berry%kmesh%mesh) - 1, loop_xyz, my_node_id, &
+                                      num_nodes, stdout)
+          end if
+          if (.not. pw90_spin_hall%freq_scan) then
+            call berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                     pw90_band_deriv_degen, ws_region, pw90_spin_hall, print_output, &
+                                     wannier_data, ws_distance, wigner_seitz, AA_R, HH_R, LL_R, &
+                                     u_matrix, v_matrix, eigval, kpt, real_lattice, scissors_shift, &
+                                     mp_grid, fermi_n, num_bands, num_kpts, num_wann, &
+                                     num_valence_bands, effective_model, have_disentangled, &
+                                     seedname, stdout, timer, error, comm, ohc_k_fermi=ohc_k_fermi)
+            if (allocated(error)) return
+            ladpt_kmesh = .false.
+            if (pw90_berry%curv_adpt_kmesh > 1) then
+              do if = 1, fermi_n
+                rdum = abs(ohc_k_fermi(if))
+                if (pw90_berry%curv_unit == 'bohr2') rdum = rdum/physics%bohr**2
+                if (rdum > pw90_berry%curv_adpt_kmesh_thresh) then
+                  adpt_counter_list(1) = adpt_counter_list(1) + 1
+                  ladpt_kmesh = .true.
+                  exit
+                end if
+              end do
+            end if
+            if (ladpt_kmesh) then
+              do loop_adpt = 1, pw90_berry%curv_adpt_kmesh**3
+                call berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                         pw90_band_deriv_degen, ws_region, pw90_spin_hall, &
+                                         print_output, wannier_data, ws_distance, wigner_seitz, &
+                                         AA_R, HH_R, LL_R, u_matrix, v_matrix, eigval, &
+                                         kpt(:) + adkpt(:, loop_adpt), real_lattice, scissors_shift, &
+                                         mp_grid, fermi_n, num_bands, num_kpts, num_wann, &
+                                         num_valence_bands, effective_model, have_disentangled, &
+                                         seedname, stdout, timer, error, comm, &
+                                         ohc_k_fermi=ohc_k_fermi_dummy)
+                if (allocated(error)) return
+                ohc_fermi = ohc_fermi + kweight_adpt*ohc_k_fermi_dummy
+              end do
+            else
+              ohc_fermi = ohc_fermi + kweight*ohc_k_fermi
+            end if
+          else ! freq_scan, no adaptive kmesh
+            call berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                     pw90_band_deriv_degen, ws_region, pw90_spin_hall, print_output, &
+                                     wannier_data, ws_distance, wigner_seitz, AA_R, HH_R, LL_R, &
+                                     u_matrix, v_matrix, eigval, kpt, real_lattice, scissors_shift, &
+                                     mp_grid, fermi_n, num_bands, num_kpts, num_wann, &
+                                     num_valence_bands, effective_model, have_disentangled, &
+                                     seedname, stdout, timer, error, comm, ohc_k_freq=ohc_k_freq)
+            if (allocated(error)) return
+            ohc_freq = ohc_freq + kweight*ohc_k_freq
+          end if
+        end if
+
       end do !loop_xyz
 
     end if !wanint_kpoint_file
@@ -1038,6 +1212,18 @@ contains
         if (allocated(error)) return
       else
         call comms_reduce(shc_fermi(1), fermi_n, 'SUM', error, comm)
+        if (allocated(error)) return
+        call comms_reduce(adpt_counter_list(1), fermi_n, 'SUM', error, comm)
+        if (allocated(error)) return
+      end if
+    end if
+
+    if (eval_ohc) then
+      if (pw90_spin_hall%freq_scan) then
+        call comms_reduce(ohc_freq(1), pw90_berry%kubo_nfreq, 'SUM', error, comm)
+        if (allocated(error)) return
+      else
+        call comms_reduce(ohc_fermi(1), fermi_n, 'SUM', error, comm)
         if (allocated(error)) return
         call comms_reduce(adpt_counter_list(1), fermi_n, 'SUM', error, comm)
         if (allocated(error)) return
@@ -1128,6 +1314,22 @@ contains
           write (stdout, '(1X,A,I0,A,G18.10,A)') "Using shc_bandshift to shift energy bands with index >= ", &
             pw90_spin_hall%bandshift_firstband, " by ", pw90_spin_hall%bandshift_energyshift, " eV."
         end if
+      elseif (eval_ohc) then
+        if (.not. pw90_berry%wanint_kpoint_file) write (stdout, &
+          '(1x,a20,3(i0,1x))') 'Interpolation grid: ', pw90_berry%kmesh%mesh(1:3)
+        write (stdout, '(a)') ''
+        if (pw90_berry%kubo_smearing%use_adaptive) then
+          write (stdout, '(1x,a)') 'Using adaptive smearing'
+          write (stdout, '(7x,a,f8.3)') 'adaptive smearing prefactor ', &
+            pw90_berry%kubo_smearing%adaptive_prefactor
+          write (stdout, '(7x,a,f8.3,a)') 'adaptive smearing max width ', &
+            pw90_berry%kubo_smearing%adaptive_max_width, ' eV'
+        else
+          write (stdout, '(1x,a)') 'Using fixed smearing'
+          write (stdout, '(7x,a,f8.3,a)') 'fixed smearing width ', &
+            pw90_berry%kubo_smearing%fixed_width, ' eV'
+        end if
+        write (stdout, '(a)') ''
       else
         if (.not. pw90_berry%wanint_kpoint_file) write (stdout, &
                                                         '(1x,a20,3(i0,1x))') 'Interpolation grid: ', pw90_berry%kmesh%mesh(1:3)
@@ -1529,6 +1731,57 @@ contains
           do n = 1, pw90_berry%kubo_nfreq
             write (file_unit, '(I4,1x,F12.6,1x,1x,2(E17.8,1x))') n, &
               real(pw90_berry%kubo_freq_list(n), dp), real(shc_freq(n), dp), aimag(shc_freq(n))
+          end do
+        end if
+        close (file_unit)
+
+      end if
+
+      if (eval_ohc) then
+        !
+        ! Convert to the unit: (hbar/e) S/cm, mirroring the spin Hall case.
+        ! The only difference from SHC is the operator prefactor:
+        ! the spin current carries hbar/2 (sigma = 2 s / hbar), whereas the
+        ! orbital angular momentum L is already in units of hbar. Hence the
+        ! SHC factor 1e8 * e^2/hbar/V/2.0 becomes, for OHC,
+        !   fac = 1.0e8 * e^2 / hbar / V          (no division by 2)
+        ! and the final unit of orbital Hall conductivity is (hbar/e)S/cm.
+        !
+        fac = 1.0e8_dp*physics%elem_charge_SI**2/(physics%hbar_SI*cell_volume)
+        if (pw90_spin_hall%freq_scan) then
+          ohc_freq = ohc_freq*fac
+        else
+          ohc_fermi = ohc_fermi*fac
+        end if
+        !
+        write (stdout, '(/,1x,a)') &
+          '----------------------------------------------------------'
+        write (stdout, '(1x,a)') &
+          'Output data files related to Orbital Hall conductivity:'
+        write (stdout, '(1x,a)') &
+          '----------------------------------------------------------'
+        !
+        if (.not. pw90_spin_hall%freq_scan) then
+          file_name = trim(seedname)//'-ohc-fermiscan'//'.dat'
+        else
+          file_name = trim(seedname)//'-ohc-freqscan'//'.dat'
+        end if
+        file_name = trim(file_name)
+        write (stdout, '(/,3x,a)') '* '//file_name
+        open (newunit=file_unit, FILE=file_name, STATUS='UNKNOWN', FORM='FORMATTED')
+        if (.not. pw90_spin_hall%freq_scan) then
+          write (file_unit, '(a,3x,a,3x,a)') &
+            '#No.', 'Fermi energy(eV)', 'OHC((hbar/e)*S/cm)'
+          do n = 1, fermi_n
+            write (file_unit, '(I4,1x,F12.6,1x,E17.8)') &
+              n, fermi_energy_list(n), ohc_fermi(n)
+          end do
+        else
+          write (file_unit, '(a,3x,a,3x,a,3x,a)') '#No.', 'Frequency(eV)', &
+            'Re(sigma)((hbar/e)*S/cm)', 'Im(sigma)((hbar/e)*S/cm)'
+          do n = 1, pw90_berry%kubo_nfreq
+            write (file_unit, '(I4,1x,F12.6,1x,1x,2(E17.8,1x))') n, &
+              real(pw90_berry%kubo_freq_list(n), dp), real(ohc_freq(n), dp), aimag(ohc_freq(n))
           end do
         end if
         close (file_unit)
@@ -2904,6 +3157,246 @@ contains
     end subroutine berry_get_js_k
 
   end subroutine berry_get_shc_klist
+
+  !================================================!
+  subroutine berry_get_ohc_klist(pw90_berry, dis_manifold, fermi_energy_list, kpt_latt, &
+                                 pw90_band_deriv_degen, ws_region, pw90_spin_hall, print_output, &
+                                 wannier_data, ws_distance, wigner_seitz, AA_R, HH_R, LL_R, &
+                                 u_matrix, v_matrix, eigval, kpt, real_lattice, scissors_shift, &
+                                 mp_grid, fermi_n, num_bands, num_kpts, num_wann, num_valence_bands, &
+                                 effective_model, have_disentangled, seedname, stdout, timer, &
+                                 error, comm, ohc_k_fermi, ohc_k_freq, ohc_k_band)
+    !================================================!
+    !
+    ! Contribution from a k-point to the ORBITAL Hall conductivity, using the
+    ! same Berry-curvature-like Kubo formula as the spin Hall conductivity
+    ! (QZYZ18 Eq.(3)&(4)) but with the spin operator replaced by the orbital
+    ! angular momentum operator L. The orbital current operator is the
+    ! anticommutator j^L_alpha = 1/2 { v_alpha, L_gamma }, evaluated in the
+    ! eigenstate (Hamiltonian) gauge from the velocity matrix V_alpha and the
+    ! rotated orbital operator Ltilde = U^dagger L(k) U. L is atomic-centered
+    ! (on-site, k-independent), supplied via LL_R in units of hbar.
+    !
+    ! The returned Berry-curvature-like term has units of angstrom^2, exactly
+    ! as for the SHC; the conversion to (hbar/e)S/cm is done by the caller with
+    ! the orbital prefactor (no division by 2, since L is already in hbar).
+    !
+    !    ohc_k_fermi: return a list for different Fermi energies
+    !    ohc_k_freq:  return a list for different frequencies
+    !    ohc_k_band:  return a list for each energy band
+    !================================================!
+
+    use w90_constants, only: dp, cmplx_0, cmplx_i
+    use w90_utility, only: utility_rotate, utility_recip_lattice_base
+    use w90_comms, only: w90_comm_type
+    use w90_types, only: print_output_type, wannier_data_type, &
+                         dis_manifold_type, kmesh_info_type, ws_region_type, ws_distance_type, timer_list_type
+    use w90_postw90_types, only: pw90_berry_mod_type, pw90_spin_hall_type, &
+                                 pw90_band_deriv_degen_type, wigner_seitz_type
+    use w90_postw90_common, only: pw90common_get_occ, pw90common_fourier_R_to_k_vec, &
+                                  pw90common_kmesh_spacing
+    use w90_wan_ham, only: wham_get_D_h, wham_get_eig_deleig
+
+    implicit none
+
+    ! arguments
+    type(pw90_berry_mod_type), intent(in) :: pw90_berry
+    type(dis_manifold_type), intent(in) :: dis_manifold
+    real(kind=dp), allocatable, intent(in) :: fermi_energy_list(:)
+    real(kind=dp), intent(in) :: kpt_latt(:, :)
+    type(pw90_band_deriv_degen_type), intent(in) :: pw90_band_deriv_degen
+    type(print_output_type), intent(in) :: print_output
+    type(ws_region_type), intent(in) :: ws_region
+    type(pw90_spin_hall_type), intent(in) :: pw90_spin_hall
+    type(w90_comm_type), intent(in) :: comm
+    type(wannier_data_type), intent(in) :: wannier_data
+    type(wigner_seitz_type), intent(inout) :: wigner_seitz
+    type(ws_distance_type), intent(inout) :: ws_distance
+    type(timer_list_type), intent(inout) :: timer
+    type(w90_error_type), allocatable, intent(out) :: error
+
+    integer, intent(in) :: num_wann, num_bands, num_kpts, num_valence_bands, fermi_n
+    integer, intent(in) :: mp_grid(3)
+    integer, intent(in) :: stdout
+
+    real(kind=dp), intent(in) :: kpt(3)
+    real(kind=dp), intent(in) :: eigval(:, :)
+    real(kind=dp), intent(in) :: real_lattice(3, 3)
+    real(kind=dp), intent(in) :: scissors_shift
+
+    complex(kind=dp), intent(in) :: u_matrix(:, :, :), v_matrix(:, :, :)
+    complex(kind=dp), allocatable, intent(inout) :: AA_R(:, :, :, :) ! <0n|r|Rm>
+    complex(kind=dp), allocatable, intent(inout) :: HH_R(:, :, :) !  <0n|H|Rm>
+    complex(kind=dp), allocatable, intent(inout) :: LL_R(:, :, :, :) ! <0n|L_x,y,z|Rm> [hbar]
+
+    character(len=50), intent(in) :: seedname
+    logical, intent(in) :: have_disentangled
+    logical, intent(in) :: effective_model
+
+    complex(kind=dp), optional, intent(out) :: ohc_k_freq(pw90_berry%kubo_nfreq)
+    real(kind=dp), optional, intent(out) :: ohc_k_fermi(fermi_n)
+    real(kind=dp), optional, intent(out) :: ohc_k_band(num_wann)
+
+    ! internal vars
+    complex(kind=dp), allocatable :: HH(:, :)
+    complex(kind=dp), allocatable :: delHH(:, :, :)
+    complex(kind=dp), allocatable :: UU(:, :)
+    complex(kind=dp), allocatable :: D_h(:, :, :)
+    complex(kind=dp), allocatable :: AA(:, :, :)
+    complex(kind=dp), allocatable :: LL(:, :, :)
+    complex(kind=dp) :: Ltilde(num_wann, num_wann)
+    complex(kind=dp) :: Valpha(num_wann, num_wann)
+    complex(kind=dp) :: jl_k(num_wann, num_wann)
+
+    logical :: lfreq, lfermi, lband
+
+    real(kind=dp) :: recip_lattice(3, 3), volume
+    integer :: n, m, i, ifreq
+
+    ! Adaptive smearing
+    real(kind=dp) :: del_eig(num_wann, 3), joint_level_spacing, eta_smr, Delta_k, vdum(3)
+    real(kind=dp) :: eig(num_wann)
+    real(kind=dp) :: occ_fermi(num_wann, fermi_n), occ_freq(num_wann)
+    real(kind=dp) :: omega, rfac
+
+    complex(kind=dp) :: omega_list(pw90_berry%kubo_nfreq)
+    complex(kind=dp) :: prod, cdum, cfac
+
+    allocate (HH(num_wann, num_wann))
+    allocate (delHH(num_wann, num_wann, 3))
+    allocate (UU(num_wann, num_wann))
+    allocate (D_h(num_wann, num_wann, 3))
+    allocate (AA(num_wann, num_wann, 3))
+    allocate (LL(num_wann, num_wann, 3))
+
+    lfreq = .false.
+    lfermi = .false.
+    lband = .false.
+    if (present(ohc_k_freq)) then
+      ohc_k_freq = 0.0_dp
+      lfreq = .true.
+    end if
+    if (present(ohc_k_fermi)) then
+      ohc_k_fermi = 0.0_dp
+      lfermi = .true.
+    end if
+    if (present(ohc_k_band)) then
+      ohc_k_band = 0.0_dp
+      lband = .true.
+    end if
+
+    call wham_get_eig_deleig(dis_manifold, kpt_latt, pw90_band_deriv_degen, ws_region, &
+                             print_output, wannier_data, ws_distance, wigner_seitz, delHH, HH, &
+                             HH_R, u_matrix, UU, v_matrix, del_eig, eig, eigval, kpt, &
+                             real_lattice, scissors_shift, mp_grid, num_bands, num_kpts, num_wann, &
+                             num_valence_bands, effective_model, have_disentangled, seedname, &
+                             stdout, timer, error, comm)
+    if (allocated(error)) return
+
+    call wham_get_D_h(delHH, D_h, UU, eig, num_wann)
+
+    ! Full covariant Berry connection in the Hamiltonian gauge (WYSV06 Eq.25)
+    call pw90common_fourier_R_to_k_vec(ws_region, wannier_data, ws_distance, wigner_seitz, AA_R, &
+                                       kpt, real_lattice, mp_grid, num_wann, error, comm, &
+                                       OO_true=AA)
+    if (allocated(error)) return
+    do i = 1, 3
+      AA(:, :, i) = utility_rotate(AA(:, :, i), UU, num_wann)
+    end do
+    AA = AA + cmplx_i*D_h
+
+    ! Orbital angular momentum operator at k (on-site => k-independent), then
+    ! rotate to the eigenstate gauge: Ltilde = U^dagger L(k) U.
+    call pw90common_fourier_R_to_k_vec(ws_region, wannier_data, ws_distance, wigner_seitz, LL_R, &
+                                       kpt, real_lattice, mp_grid, num_wann, error, comm, &
+                                       OO_true=LL)
+    if (allocated(error)) return
+    Ltilde(:, :) = utility_rotate(LL(:, :, pw90_spin_hall%gamma), UU, num_wann)
+
+    ! Velocity matrix V_alpha in the eigenstate gauge (units eV*Ang, i.e. hbar*v):
+    !   diagonal     <n|hbar v_alpha|n> = d eps_n / d k_alpha
+    !   off-diagonal <n|hbar v_alpha|m> = i (eps_n - eps_m) AA(n,m,alpha)
+    ! (consistent with the SHC Kubo loop, where the beta-velocity appears as
+    !  i (eps_m - eps_n) AA(m,n,beta) = <m|hbar v_beta|n>).
+    do n = 1, num_wann
+      do m = 1, num_wann
+        if (n == m) then
+          Valpha(n, m) = cmplx(del_eig(n, pw90_spin_hall%alpha), 0.0_dp, dp)
+        else
+          Valpha(n, m) = cmplx_i*(eig(n) - eig(m))*AA(n, m, pw90_spin_hall%alpha)
+        end if
+      end do
+    end do
+
+    ! Orbital current operator j^L_alpha = 1/2 { V_alpha, Ltilde_gamma }
+    jl_k = 0.5_dp*(matmul(Valpha, Ltilde) + matmul(Ltilde, Valpha))
+
+    ! adpt_smr only works with pw90_berry_kmesh, so do not use
+    ! adpt_smr in kpath or kslice plots.
+    if (pw90_berry%kubo_smearing%use_adaptive) then
+      call utility_recip_lattice_base(real_lattice, recip_lattice, volume)
+      Delta_k = pw90common_kmesh_spacing(pw90_berry%kmesh%mesh, recip_lattice)
+    end if
+    if (lfreq) then
+      call pw90common_get_occ(fermi_energy_list(1), eig, occ_freq, num_wann)
+    elseif (lfermi) then
+      do i = 1, fermi_n
+        call pw90common_get_occ(fermi_energy_list(i), eig, occ_fermi(:, i), num_wann)
+      end do
+    end if
+    do n = 1, num_wann
+      if (lfreq) then
+        omega_list = cmplx_0
+      else if (lfermi .or. lband) then
+        omega = 0.0_dp
+      end if
+      do m = 1, num_wann
+        if (m == n) cycle
+        if (eig(m) > pw90_berry%kubo_eigval_max .or. eig(n) > pw90_berry%kubo_eigval_max) cycle
+
+        rfac = eig(m) - eig(n)
+        prod = jl_k(n, m)*cmplx_i*rfac*AA(m, n, pw90_spin_hall%beta)
+        if (pw90_berry%kubo_smearing%use_adaptive) then
+          vdum(:) = del_eig(m, :) - del_eig(n, :)
+          joint_level_spacing = sqrt(dot_product(vdum(:), vdum(:)))*Delta_k
+          eta_smr = min(joint_level_spacing*pw90_berry%kubo_smearing%adaptive_prefactor, &
+                        pw90_berry%kubo_smearing%adaptive_max_width)
+        else
+          eta_smr = pw90_berry%kubo_smearing%fixed_width
+        end if
+        if (lfreq) then
+          do ifreq = 1, pw90_berry%kubo_nfreq
+            cdum = real(pw90_berry%kubo_freq_list(ifreq), dp) + cmplx_i*eta_smr
+            cfac = -2.0_dp/(rfac**2 - cdum**2)
+            omega_list(ifreq) = omega_list(ifreq) + cfac*aimag(prod)
+          end do
+        else if (lfermi .or. lband) then
+          rfac = -2.0_dp/(rfac**2 + eta_smr**2)
+          omega = omega + rfac*aimag(prod)
+        end if
+      end do
+
+      if (lfermi) then
+        do i = 1, fermi_n
+          ohc_k_fermi(i) = ohc_k_fermi(i) + occ_fermi(n, i)*omega
+        end do
+      else if (lfreq) then
+        ohc_k_freq = ohc_k_freq + occ_freq(n)*omega_list
+      else if (lband) then
+        ohc_k_band(n) = omega
+      end if
+    end do
+
+    deallocate (LL)
+    deallocate (AA)
+    deallocate (D_h)
+    deallocate (UU)
+    deallocate (delHH)
+    deallocate (HH)
+
+    return
+
+  end subroutine berry_get_ohc_klist
 
   !================================================!
   subroutine berry_print_progress(end_k, loop_k, start_k, step_k, stdout)

@@ -896,7 +896,8 @@ contains
     if (pw90_calculation%berry .and. index(pw90_berry%task, 'ahc') == 0 &
         .and. index(pw90_berry%task, 'morb') == 0 &
         .and. index(pw90_berry%task, 'kubo') == 0 .and. index(pw90_berry%task, 'sc') == 0 &
-        .and. index(pw90_berry%task, 'shc') == 0 .and. index(pw90_berry%task, 'kdotp') == 0) then
+        .and. index(pw90_berry%task, 'shc') == 0 .and. index(pw90_berry%task, 'kdotp') == 0 &
+        .and. index(pw90_berry%task, 'ohc') == 0) then
 
       call set_error_input(error, 'Error: value of berry_task not recognised in w90_wannier90_readwrite_read', comm)
       return
@@ -1069,6 +1070,39 @@ contains
     if (allocated(error)) return
     if (found .and. (pw90_spin_hall%gamma < 1 .or. pw90_spin_hall%gamma > 3)) then
       call set_error_input(error, 'Error:  shc_gamma must be 1, 2 or 3', comm)
+      return
+    end if
+
+    ! Orbital Hall conductivity (berry_task = eval_ohc) shares the same
+    ! Kubo machinery and tensor components as the spin Hall conductivity; the
+    ! orbital operator L replaces the spin operator. The ohc_* keywords are
+    ! aliases that set the same alpha/beta/gamma/freq_scan fields (the two
+    ! tasks are mutually exclusive). Defaults give the sigma^z_{xy} component.
+    call w90_readwrite_get_keyword(settings, 'ohc_freq_scan', found, error, comm, &
+                                   l_value=pw90_spin_hall%freq_scan)
+    if (allocated(error)) return
+
+    call w90_readwrite_get_keyword(settings, 'ohc_alpha', found, error, comm, &
+                                   i_value=pw90_spin_hall%alpha)
+    if (allocated(error)) return
+    if (found .and. (pw90_spin_hall%alpha < 1 .or. pw90_spin_hall%alpha > 3)) then
+      call set_error_input(error, 'Error:  ohc_alpha must be 1, 2 or 3', comm)
+      return
+    end if
+
+    call w90_readwrite_get_keyword(settings, 'ohc_beta', found, error, comm, &
+                                   i_value=pw90_spin_hall%beta)
+    if (allocated(error)) return
+    if (found .and. (pw90_spin_hall%beta < 1 .or. pw90_spin_hall%beta > 3)) then
+      call set_error_input(error, 'Error:  ohc_beta must be 1, 2 or 3', comm)
+      return
+    end if
+
+    call w90_readwrite_get_keyword(settings, 'ohc_gamma', found, error, comm, &
+                                   i_value=pw90_spin_hall%gamma)
+    if (allocated(error)) return
+    if (found .and. (pw90_spin_hall%gamma < 1 .or. pw90_spin_hall%gamma > 3)) then
+      call set_error_input(error, 'Error:  ohc_gamma must be 1, 2 or 3', comm)
       return
     end if
 
@@ -2131,14 +2165,6 @@ contains
         write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  Spn file-type                   :', 'formatted', '|'
       else
         write (stdout, '(1x,a46,7x,a11,13x,a1)') '|  Spn file-type                   :', 'unformatted', '|'
-      end if
-      write (stdout, '(1x,a46,10x,L8,13x,a1)') '|  Write/read orbital data                  :', pw90_oper_read%write_orb, '|'
-      if (pw90_oper_read%orb_formatted) then
-        write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  Orb file-type                   :', 'formatted', '|'
-        write (stdout, '(1x,a46,8x,a10,13x,a1)') '|  Orb file read/write             :', trim(seedname)//'.orb.fmt', '|'
-      else
-        write (stdout, '(1x,a46,7x,a11,13x,a1)') '|  Orb file-type                   :', 'unformatted', '|'
-        write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  Orb file read/write             :', trim(seedname)//'.orb', '|'
       end if
       if (pw90_oper_read%uHu_formatted) then
         write (stdout, '(1x,a46,9x,a9,13x,a1)') '|  uHu file-type                   :', 'formatted', '|'
